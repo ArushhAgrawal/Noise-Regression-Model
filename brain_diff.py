@@ -177,7 +177,7 @@ end=time.time()
 #visualisation
 model.eval()
 
-# Pick a single timestep tensor from the list (e.g., index0)
+
 x, y = next(iter(val_loader))
 noisy_batch = x[0].to(device) 
 clean_batch = y[0].to(device)
