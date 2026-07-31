@@ -1,0 +1,6 @@
+*.pth
+data/
+data/
+*.pth
+checkpoint/
+checkpoint2/
