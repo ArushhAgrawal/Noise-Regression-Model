@@ -18,10 +18,10 @@ class DoubleConv(nn.Module):
         super().__init__()
         self.convstack= nn.Sequential(
             nn.Conv2d(in_features, out_features, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(out_features), 
+            nn.GroupNorm(8, out_features), 
             nn.ReLU(),
             nn.Conv2d(out_features, out_features, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(out_features), 
+            nn.GroupNorm(8, out_features), 
             nn.ReLU()
         )
     def forward(self,x):
@@ -126,7 +126,7 @@ optimizer= torch.optim.Adam(model.parameters(), lr=0.001)
 loss_fn= nn.L1Loss()
 #making checkpoints
 start_epoch=0
-epochs=3
+epochs=30
 run_loss=0
 checkpoint_dir= "checkpoint2"
 os.makedirs(checkpoint_dir,exist_ok=True)
@@ -168,6 +168,8 @@ for epoch in epoch_bar:
     with torch.inference_mode():
         for index in range(5):
             for batch, (x,y) in enumerate(val_loader):
+                # noise_test= torch.randn_like(x[index].to(device))*1000/255.0
+                # noise_test_clamp= torch.clamp(x[index].to(device)+noise_test, 0.0, 1.0)
                 y_logits_test= model(x[index].to(device))
                 loss_test= loss_fn(y_logits_test, y[index].to(device)) 
                 net_loss_test.append(loss_test.item())#why item is imp since if we dont do item it would be like this loss value, mps, gradfunc all this if we do item its just the loss value
