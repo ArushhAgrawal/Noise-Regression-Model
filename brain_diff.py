@@ -32,7 +32,7 @@ class NOISE(nn.Module):
         super().__init__()
         self.up= nn.ModuleList()
         self.down= nn.ModuleList()
-        self.pool= nn.AvgPool2d(kernel_size=2, stride=2)
+        self.pool= nn.MaxPool2d(kernel_size=2, stride=2)
         #down part
         for feature in features:
             self.down.append(DoubleConv(in_channels, feature))
@@ -79,123 +79,129 @@ class ImageDataset(Dataset):
         return len(self.images)
     def __getitem__(self,index):
         sigma=20
-        noise_range=(sigma,sigma*3)
+        noise_range=(sigma,67)
         noise_list=[]
         noisy_tensor=[]
-        clear_tensor=[]
         image_name=self.images[index]
         image_path= os.path.join(self.image_dir, image_name)#creates a direct path to the image
         image= Image.open(image_path).convert("RGB")
         #resizing image
         image= TF.resize(image,self.reshape)
-        clear_tensor_single= TF.to_tensor(image)
-        clear_tensor.append(clear_tensor_single)
-        for i in range(5):
+        clear_tensor= TF.to_tensor(image)
+        for i in range(3):
             sigma = np.random.uniform(*noise_range) #to convert all the pixel data values we use divide by 255.0, * is the unpacking opertor random.uniform take input as low, high and if i will not use star it will keep low=(10,50) insted of low=10
-            noise = torch.randn_like(clear_tensor_single) * (sigma/255.0)
+            noise = torch.randn_like(clear_tensor) * (sigma/255.0)
             noise_list.append(noise)
-        for index in range(5):
+        for index in range(3):
             noise_at_index= noise_list[index]#returning tensor
-            noisy_tensor_single = torch.clamp(clear_tensor_single + noise_at_index, 0.0, 1.0)
+            noisy_tensor_single = torch.clamp(clear_tensor + noise_at_index, 0.0, 1.0)
             noisy_tensor.append(noisy_tensor_single)
-        for index in range(4):
-            clear_tensor.append(noisy_tensor[index])
+        
         return noisy_tensor, clear_tensor 
 #loading data
-full_data= ImageDataset(image_dir="data/clear_images/", resize_shape=(160,160), max_image=120)
-train_size= int(0.8*(len(full_data)))
-val_size= len(full_data)-train_size
-train_dataset, val_dataset= random_split(full_data, [train_size, val_size])
-train_loader=DataLoader(
-    dataset=train_dataset,
-    batch_size=4,        
-    shuffle=True)
-val_loader= DataLoader(
-    dataset=val_dataset,
-    batch_size=4,
-    shuffle=False)
+if __name__=="__main__":#runs from here after each time we run the code not from the import
+    full_data= ImageDataset(image_dir="data/clear_images/", resize_shape=(160,160), max_image=120)
+    train_size= int(0.8*(len(full_data)))
+    val_size= len(full_data)-train_size
+    train_dataset, val_dataset= random_split(full_data, [train_size, val_size])
+    train_loader=DataLoader(
+        dataset=train_dataset,
+        batch_size=4,
+        num_workers=4, 
+        persistent_workers=True,       
+        shuffle=True)
+    val_loader= DataLoader(
+        dataset=val_dataset,
+        num_workers=2,
+        persistent_workers=True,
+        batch_size=4,
+        shuffle=False)
 # x, y = next(iter(val_loader))
 # print(y[0].shape)
 
 # # setting up device diagnostic code
-device= "mps" if torch.mps.is_available() else "cpu"
+    device= "mps" if torch.mps.is_available() else "cpu"
 #defining model
-model= NOISE(in_channels=3, out_channels=3).to(device)
+    model= NOISE(in_channels=3, out_channels=3).to(device)
 #defining loss and optimizer
-optimizer= torch.optim.Adam(model.parameters(), lr=0.001)
-loss_fn= nn.L1Loss()
+    optimizer= torch.optim.Adam(model.parameters(), lr=0.0001)
+    loss_fn= nn.L1Loss()
 #making checkpoints
-start_epoch=0
-epochs=30
-run_loss=0
-checkpoint_dir= "checkpoint2"
-os.makedirs(checkpoint_dir,exist_ok=True)
-latest_chkp2=os.path.join(checkpoint_dir, "latest_2.pth")
-if os.path.exists(latest_chkp2):
-    checkpoint= torch.load(latest_chkp2, map_location=device)
-    model.load_state_dict(checkpoint["model_state"])
-    optimizer.load_state_dict(checkpoint["optimizer_state"])
-    start_epoch= checkpoint["epoch"]+1
-    average_loss= checkpoint["loss"]
-    print("resumed from checkpoint")
+    start_epoch=0
+    epochs=120
+    run_loss=0
+    checkpoint_dir= "checkpoint2"
+    os.makedirs(checkpoint_dir,exist_ok=True)
+    latest_chkp2=os.path.join(checkpoint_dir, "latest_2.pth")
+    if os.path.exists(latest_chkp2):
+        checkpoint= torch.load(latest_chkp2, map_location=device)
+        model.load_state_dict(checkpoint["model_state"])
+        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        start_epoch= checkpoint["epoch"]+1
+        average_loss= checkpoint["loss"]
+        print("resumed from checkpoint")
 
 #training/eval
-start= time.time()
-net_loss_train= []
-net_loss_test= []
-epoch_bar= tqdm.tqdm(range(start_epoch, epochs), desc= "Training Model")
-for epoch in epoch_bar:
-    model.train()
-    run_loss=0
-    for index in range(5):
+    start= time.time()
+    net_loss_train= []
+    net_loss_test= []
+    epoch_bar= tqdm.tqdm(range(start_epoch, epochs), desc= "Training Model")
+    for epoch in epoch_bar:
+        model.train()
+        run_loss=0
         for batch, (x,y) in enumerate(train_loader):
-            y_train_logits= model(x[index].to(device))
-            loss_train=loss_fn(y_train_logits,y[index].to(device))
-            optimizer.zero_grad()
-            loss_train.backward()
-            optimizer.step()
-            net_loss_train.append(loss_train.item())
-            run_loss+= loss_train.item()
-    avg_loss=run_loss/len(train_loader)
-    torch.save({
-        "epoch": epoch,
-        "model_state": model.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-        "loss": avg_loss,
-    }, latest_chkp2)
+            y_train= y.to(device, non_blocking=True)
+            for index in range(3):
+                x_train= x[index].to(device, non_blocking=True)
+                y_train_logits= model(x_train)
+                loss_train=loss_fn(y_train_logits,y_train)
+                optimizer.zero_grad()
+                loss_train.backward()
+                optimizer.step()
+                net_loss_train.append(loss_train.item())
+                run_loss+= loss_train.item()
+        avg_loss=run_loss/(len(train_loader)*3)
+        torch.save({
+            "epoch": epoch,
+            "model_state": model.state_dict(),
+            "optimizer_state": optimizer.state_dict(),
+            "loss": avg_loss,
+        }, latest_chkp2)
 
-    model.eval()
-    with torch.inference_mode():
-        for index in range(5):
+        model.eval()
+        with torch.inference_mode():
             for batch, (x,y) in enumerate(val_loader):
+                y_test= y.to(device, non_blocking=True)
+                for index in range(3):
                 # noise_test= torch.randn_like(x[index].to(device))*1000/255.0
                 # noise_test_clamp= torch.clamp(x[index].to(device)+noise_test, 0.0, 1.0)
-                y_logits_test= model(x[index].to(device))
-                loss_test= loss_fn(y_logits_test, y[index].to(device)) 
-                net_loss_test.append(loss_test.item())#why item is imp since if we dont do item it would be like this loss value, mps, gradfunc all this if we do item its just the loss value
-end=time.time()
+                    x_test= x[index].to(device, non_blocking=True)#instead of stoping when tranfering the data/ memory to gpu from cpu does it instantly and then continues to the next step
+                    y_logits_test= model(x_test)
+                    loss_test= loss_fn(y_logits_test, y_test)
+                    net_loss_test.append(loss_test.item())#why item is imp since if we dont do item it would be like this loss value, mps, gradfunc all this if we do item its just the loss value
+    end=time.time()
 # print("\ntime taken", end-start,"\nloss train",avg_loss ,"\nloss test", loss_test, "\nloss every batch train", net_loss_train, "\nloss every batch test",net_loss_test) 
 
 #visualisation
-model.eval()
+    model.eval()
 
 
-x, y = next(iter(val_loader))
-noisy_batch = x[0].to(device) 
-clean_batch = y[0].to(device)
+    x, y = next(iter(val_loader))
+    noisy_batch = x[0].to(device) 
+    clean_batch = y[0].to(device)
 
-with torch.inference_mode():
-    preds = model(noisy_batch).cpu()
+    with torch.inference_mode():
+        preds = model(noisy_batch).cpu()
 
 # Pick the first image from the batch
-idx = 0
-noisy_img = x[0][idx].permute(1, 2, 0).numpy()
-clean_img = y[0][idx].permute(1, 2, 0).numpy()
-pred_img  = preds[idx].permute(1, 2, 0).numpy()
+    idx = 0
+    noisy_img = x[0][idx].permute(1, 2, 0).numpy()
+    clean_img = y[0].permute(1, 2, 0).numpy()
+    pred_img  = preds[idx].permute(1, 2, 0).numpy()
 
-fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-axes[0].imshow(noisy_img); axes[0].set_title("Noisy (input)"); axes[0].axis("off")
-axes[1].imshow(pred_img);  axes[1].set_title("Model output");  axes[1].axis("off")
-axes[2].imshow(clean_img); axes[2].set_title("Clean (target)"); axes[2].axis("off")
-plt.show()
+    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    axes[0].imshow(noisy_img); axes[0].set_title("Noisy (input)"); axes[0].axis("off")
+    axes[1].imshow(pred_img);  axes[1].set_title("Model output");  axes[1].axis("off")
+    axes[2].imshow(clean_img); axes[2].set_title("Clean (target)"); axes[2].axis("off")
+    plt.show()
 
