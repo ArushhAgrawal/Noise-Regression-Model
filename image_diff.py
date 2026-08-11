@@ -11,25 +11,49 @@ import tqdm
 import matplotlib
 matplotlib.use("MacOSX")
 import matplotlib.pyplot as plt
-class DoubleConv(nn.Module):
-    def __init__(self, in_features, out_features ):
+
+class TimeEmbedding(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.convstack= nn.Sequential(
-            nn.Conv2d(in_features, out_features, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.GroupNorm(8, out_features), 
+        self.time_vector= nn.Sequential(
+            nn.Linear(1, 128),
             nn.ReLU(),
-            nn.Conv2d(out_features, out_features, kernel_size=3, stride=1, padding=1, bias=False),
-            nn.GroupNorm(8, out_features), 
+            nn.Linear(128, 256),
+            nn.ReLU(),
+            nn.Linear(256, 512),
             nn.ReLU()
         )
-    def forward(self,x):
-        return self.convstack(x)
+    def forward(self, time_stamp):
+        time_vector= time_stamp.unsqueeze(-1).float()
+        return self.time_vector(time_vector)
+    
+
+class DoubleConv(nn.Module):
+    def __init__(self, in_features, out_features):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_features, out_features, kernel_size=3, padding=1, bias=False)
+        self.norm1 = nn.GroupNorm(8, out_features)
+        self.relu = nn.ReLU()
+        self.time_proj = nn.Linear(512, out_features)  # Projects 512 global vector -> block channel count
+        self.conv2 = nn.Conv2d(out_features, out_features, kernel_size=3, padding=1, bias=False)
+        self.norm2 = nn.GroupNorm(8, out_features)
+    def forward(self,x, time_stamp):
+        x = self.conv1(x)
+        x = self.norm1(x)
+        t = self.time_proj(time_stamp)
+        t = t.unsqueeze(-1).unsqueeze(-1)  # Reshape to (batch, channels, 1, 1)
+        x = x + t  # Add time embedding to feature map
+        x = self.relu(x)
+        x = self.conv2(x)
+        x = self.norm2(x)
+        x = self.relu(x)
+        return x
 
 class NOISE(nn.Module):
     def __init__(self, time_stamp, in_channels=3,  out_channels=3, features=[64,128,256,512]):
         super().__init__()
         self.up= nn.ModuleList()
-        self.down= nn.ModuleList()
+        self.down= nn.ModuleList() 
         self.pool= nn.MaxPool2d(kernel_size=2, stride=2)
         #down part
         for feature in features:
@@ -84,13 +108,13 @@ class ImageDataset(Dataset):
         #resizing image
         image= TF.resize(image,self.reshape)
         clear_tensor= TF.to_tensor(image)
-        timestamp=torch.randint(1,1000)
+        timestamp=torch.randint(1,1000,())
         start, sigma= torch.round((start+(timestamp-1)*diffrence),2)#to get sigma and start value in 2 decmial points
         beta = (sigma/255.0)
         noise= torch.randn_like(clear_tensor) * beta
-        noisy_tensor = torch.clamp(clear_tensor * noise, 0.0, 1.0)
+        noisy_tensor = torch.clamp(clear_tensor + noise, 0.0, 1.0)
         time_stamp=timestamp
-        return noisy_tensor,time_stamp, noisy_tensor
+        return noisy_tensor,time_stamp, noise
     
 #loading data
 if __name__=="__main__":#runs from here after each time we run the code not from the import
@@ -112,7 +136,7 @@ if __name__=="__main__":#runs from here after each time we run the code not from
         shuffle=False)
 # x, y = next(iter(val_loader))
 # print(y[0].shape)
-
+    
 # # setting up device diagnostic code
     device= "mps" if torch.mps.is_available() else "cpu"
 #defining model
@@ -124,11 +148,11 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     start_epoch=0
     epochs=120
     run_loss=0
-    checkpoint_dir= "checkpoint2"
+    checkpoint_dir= "checkpoint3"
     os.makedirs(checkpoint_dir,exist_ok=True)
-    latest_chkp2=os.path.join(checkpoint_dir, "latest_2.pth")
-    if os.path.exists(latest_chkp2):
-        checkpoint= torch.load(latest_chkp2, map_location=device)
+    latest_chkp3=os.path.join(checkpoint_dir, "latest_3.pth")
+    if os.path.exists(latest_chkp3):
+        checkpoint= torch.load(latest_chkp3, map_location=device)
         model.load_state_dict(checkpoint["model_state"])
         optimizer.load_state_dict(checkpoint["optimizer_state"])
         start_epoch= checkpoint["epoch"]+1
@@ -160,7 +184,7 @@ if __name__=="__main__":#runs from here after each time we run the code not from
             "model_state": model.state_dict(),
             "optimizer_state": optimizer.state_dict(),
             "loss": avg_loss,
-        }, latest_chkp2)
+        }, latest_chkp3)
     end=time.time()
 # print("\ntime taken", end-start,"\nloss train",avg_loss ,"\nloss test", loss_test, "\nloss every batch train", net_loss_train, "\nloss every batch test",net_loss_test) 
 
