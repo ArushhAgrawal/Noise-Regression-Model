@@ -42,7 +42,7 @@ class DoubleConv(nn.Module):
         x = self.norm1(x)
         t = self.time_proj(time_stamp)
         t = t.unsqueeze(-1).unsqueeze(-1)  # Reshape to (batch, channels, 1, 1)
-        x = x + t  # Add time embedding to feature map
+        x = x + t  # Add time embedding to feature map, this acts as a time based bias system, it affects the activation, working on image generation with timestep
         x = self.relu(x)
         x = self.conv2(x)
         x = self.norm2(x)
@@ -50,11 +50,15 @@ class DoubleConv(nn.Module):
         return x
 
 class NOISE(nn.Module):
-    def __init__(self, time_stamp, in_channels=3,  out_channels=3, features=[64,128,256,512]):
+    def __init__(self,  in_channels=3,  out_channels=3, features=[64,128,256,512]):
         super().__init__()
         self.up= nn.ModuleList()
         self.down= nn.ModuleList() 
         self.pool= nn.MaxPool2d(kernel_size=2, stride=2)
+
+        #time embedding 
+        self.time_embedding= TimeEmbedding()
+
         #down part
         for feature in features:
             self.down.append(DoubleConv(in_channels, feature))
@@ -70,15 +74,16 @@ class NOISE(nn.Module):
         self.final_conv= nn.Conv2d(features[0], out_channels,  kernel_size=1)
     def forward(self, x, time_stamp):
         skip=[]
+        time_emb= self.time_embedding(time_stamp)
         #downward pass
         for index in self.down:
-            x=index(x)
+            x=index(x, time_emb)
             skip.append(x)#this is the part where it will skip the connection from the heightest to the lowest connection
             x=self.pool(x)#160x160-> 80x80
-        x=self.bottom(x)
+        x=self.bottom(x, time_emb)
         skip= skip[::-1]#reversing the list 
         for index in range (0,len(self.up), 2):
-            x=self.up[index](x)#up sampling
+            x=self.up[index](x)#up sampling, even conv transpose it takes only one argument 
             skip_tensor= skip[index//2]#divides and then rounds to nearest whole number
             if skip_tensor.shape == x.shape:
                 concat_skip= torch.cat((skip_tensor, x),dim=1)    
@@ -86,7 +91,7 @@ class NOISE(nn.Module):
                 l= x.shape[2]
                 w=x.shape[3]
                 concat_skip= torch.cat((skip_tensor[:,:, :l, :w], x),dim=1)
-            x= self.up[index+1](concat_skip)
+            x= self.up[index+1](concat_skip, time_emb)#odd one double conv
         return self.final_conv(x)
 
 
@@ -109,7 +114,7 @@ class ImageDataset(Dataset):
         image= TF.resize(image,self.reshape)
         clear_tensor= TF.to_tensor(image)
         timestamp=torch.randint(1,1000,())
-        start, sigma= torch.round((start+(timestamp-1)*diffrence),2)#to get sigma and start value in 2 decmial points
+        sigma= start+(timestamp-1)*diffrence#to get sigma and start value in 2 decmial points
         beta = (sigma/255.0)
         noise= torch.randn_like(clear_tensor) * beta
         noisy_tensor = torch.clamp(clear_tensor + noise, 0.0, 1.0)
@@ -146,7 +151,7 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     loss_fn= nn.L1Loss()
 #making checkpoints
     start_epoch=0
-    epochs=120
+    epochs=3
     run_loss=0
     checkpoint_dir= "checkpoint3"
     os.makedirs(checkpoint_dir,exist_ok=True)
@@ -167,18 +172,17 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     for epoch in epoch_bar:
         model.train()
         run_loss=0
-        for batch, (x,y) in enumerate(train_loader):
-            y_train= y.to(device, non_blocking=True)
-            for index in range(3):
-                x_train= x[index].to(device, non_blocking=True)
-                y_train_logits= model(x_train)
-                loss_train=loss_fn(y_train_logits,y_train)
-                optimizer.zero_grad()
-                loss_train.backward()
-                optimizer.step()
-                net_loss_train.append(loss_train.item())
-                run_loss+= loss_train.item()
-        avg_loss=run_loss/(len(train_loader)*3)
+        for batch, (noisy_img, time_stamp, noise) in enumerate(train_loader):
+            image_train= noisy_img.to(device, non_blocking=True)
+            time_train= time_stamp.to(device, non_blocking=True)
+            noise_train= noise.to(device, non_blocking=True)
+            y_train_logits= model(image_train, time_train)
+            loss_train=loss_fn(y_train_logits, noise_train)
+            optimizer.zero_grad()
+            loss_train.backward()
+            optimizer.step()
+            run_loss+= loss_train.item()
+        avg_loss=run_loss/(len(train_loader))
         torch.save({
             "epoch": epoch,
             "model_state": model.state_dict(),
@@ -186,27 +190,25 @@ if __name__=="__main__":#runs from here after each time we run the code not from
             "loss": avg_loss,
         }, latest_chkp3)
     end=time.time()
-# print("\ntime taken", end-start,"\nloss train",avg_loss ,"\nloss test", loss_test, "\nloss every batch train", net_loss_train, "\nloss every batch test",net_loss_test) 
+    print("\ntime taken", end-start,"\nloss train",avg_loss)
 
 #visualisation
     model.eval()
-
-
-    x, y = next(iter(val_loader))
-    noisy_batch = x[0].to(device) 
-    clean_batch = y[0].to(device)
+    with torch.inference_mode():
+        noisy_img, time_stamp, noise = next(iter(val_loader))
+        img_batch = noisy_img.to(device) 
+        noise_batch = noise.to(device)
 
     with torch.inference_mode():
-        preds = model(noisy_batch).cpu()
+        preds = model(img_batch, time_stamp).cpu()
 
 # Pick the first image from the batch
-    idx = 0
-    noisy_img = x[0][idx].permute(1, 2, 0).numpy()
-    clean_img = y[0].permute(1, 2, 0).numpy()
-    pred_img  = preds[idx].permute(1, 2, 0).numpy()
+    noisy_img = img_batch[0].permute(1, 2, 0).numpy()
+    noise = noise.permute(1, 2, 0).numpy()
+    pred_img  = preds.permute(1, 2, 0).numpy()
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
     axes[0].imshow(noisy_img); axes[0].set_title("Noisy (input)"); axes[0].axis("off")
     axes[1].imshow(pred_img);  axes[1].set_title("Model output");  axes[1].axis("off")
-    axes[2].imshow(clean_img); axes[2].set_title("Clean (target)"); axes[2].axis("off")
+    axes[2].imshow(); axes[2].set_title("Clean (target)"); axes[2].axis("off")
     plt.show()
