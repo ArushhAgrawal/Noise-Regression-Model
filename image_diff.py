@@ -11,6 +11,7 @@ import tqdm
 import matplotlib
 matplotlib.use("MacOSX")
 import matplotlib.pyplot as plt
+import math
 
 class TimeEmbedding(nn.Module):
     def __init__(self):
@@ -105,8 +106,8 @@ class ImageDataset(Dataset):
     def __len__(self):
         return len(self.images)
     def __getitem__(self,index):
-        start=1
-        diffrence= 1
+        start=1/2
+        diffrence= 1/2
         image_name=self.images[index]
         image_path= os.path.join(self.image_dir, image_name)#creates a direct path to the image
         image= Image.open(image_path).convert("RGB")
@@ -114,10 +115,11 @@ class ImageDataset(Dataset):
         image= TF.resize(image,self.reshape)
         clear_tensor= TF.to_tensor(image)
         timestamp=torch.randint(1,1000,())
-        sigma= start+(timestamp-1)*diffrence#to get sigma and start value in 2 decmial points
-        beta = (sigma/255.0)
-        noise= torch.randn_like(clear_tensor) * beta
-        noisy_tensor = torch.clamp(clear_tensor + noise, 0.0, 1.0)
+        angle= (timestamp.float()*math.pi)/2000
+        image_weight= torch.cos(angle)
+        noise_weight= torch.sin(angle)
+        noise= torch.randn_like(clear_tensor)
+        noisy_tensor = (clear_tensor*image_weight) + (noise*noise_weight)
         time_stamp=timestamp
         return noisy_tensor,time_stamp, noise
     
@@ -148,10 +150,10 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     model= NOISE(in_channels=3, out_channels=3).to(device)
 #defining loss and optimizer
     optimizer= torch.optim.Adam(model.parameters(), lr=0.0001)
-    loss_fn= nn.L1Loss()
+    loss_fn= nn.MSELoss()
 #making checkpoints
     start_epoch=0
-    epochs=3
+    epochs=20
     run_loss=0
     checkpoint_dir= "checkpoint3"
     os.makedirs(checkpoint_dir,exist_ok=True)
@@ -190,25 +192,33 @@ if __name__=="__main__":#runs from here after each time we run the code not from
             "loss": avg_loss,
         }, latest_chkp3)
     end=time.time()
-    print("\ntime taken", end-start,"\nloss train",avg_loss)
+    #print("\ntime taken", end-start,"\nloss train",avg_loss)
 
 #visualisation
     model.eval()
     with torch.inference_mode():
         noisy_img, time_stamp, noise = next(iter(val_loader))
         img_batch = noisy_img.to(device) 
+        time_batch = time_stamp.to(device)
         noise_batch = noise.to(device)
 
     with torch.inference_mode():
-        preds = model(img_batch, time_stamp).cpu()
+        preds = model(img_batch, time_batch).cpu()
 
 # Pick the first image from the batch
-    noisy_img = img_batch[0].permute(1, 2, 0).numpy()
-    noise = noise.permute(1, 2, 0).numpy()
-    pred_img  = preds.permute(1, 2, 0).numpy()
+    noisy_img = img_batch[0].cpu().permute(1, 2, 0).numpy()
+    noise = noise_batch[0].cpu().permute(1, 2, 0).numpy()
+    org_noise= noise*math.sin((time_batch[0].item()*math.pi)/2000)
+    pred_noise  = preds[0].cpu().permute(1, 2, 0).numpy()
+    rec_noise= pred_noise*math.sin((time_batch[0].item()*math.pi)/2000)
+    cos= max(math.cos((time_batch[0].item()*math.pi)/2000),1e-7)
+    reconstructed_img = np.clip((noisy_img - rec_noise)/cos, 0.0, 1.0)
+    original_img = np.clip((noisy_img - org_noise)/cos, 0.0, 1.0)
 
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-    axes[0].imshow(noisy_img); axes[0].set_title("Noisy (input)"); axes[0].axis("off")
-    axes[1].imshow(pred_img);  axes[1].set_title("Model output");  axes[1].axis("off")
-    axes[2].imshow(); axes[2].set_title("Clean (target)"); axes[2].axis("off")
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
+    axes[0].imshow(noisy_img); axes[0].set_title("Noisy Image(input)"); axes[0].axis("off")
+    axes[1].imshow(pred_noise);  axes[1].set_title("Model output(Noise)");  axes[1].axis("off")
+    axes[2].imshow(reconstructed_img); axes[2].set_title("Reconstructed (by removing noise)"); axes[2].axis("off")
+    axes[3].imshow(noise); axes[3].set_title("Noise (target)"); axes[3].axis("off")
+    axes[4].imshow(original_img); axes[4].set_title("Original Image (by removing noise)"); axes[4].axis("off")
     plt.show()
