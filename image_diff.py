@@ -125,7 +125,7 @@ class ImageDataset(Dataset):
     
 #loading data
 if __name__=="__main__":#runs from here after each time we run the code not from the import
-    full_data= ImageDataset(image_dir="data/clear_images/", resize_shape=(160,160), max_image=220)
+    full_data= ImageDataset(image_dir="data/clear_images/", resize_shape=(160,160), max_image=320)
     train_size= int(0.8*(len(full_data)))
     val_size= len(full_data)-train_size
     train_dataset, val_dataset= random_split(full_data, [train_size, val_size])
@@ -153,7 +153,7 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     loss_fn= nn.MSELoss()
 #making checkpoints
     start_epoch=0
-    epochs=20
+    epochs=100
     run_loss=0
     checkpoint_dir= "checkpoint3"
     os.makedirs(checkpoint_dir,exist_ok=True)
@@ -194,7 +194,33 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     end=time.time()
     #print("\ntime taken", end-start,"\nloss train",avg_loss)
 
-#visualisation
+#generating image
+    model.eval()
+    generative_image = torch.randn((1, 3, 160, 160)).to(device)  # keep batch dim for the model
+
+    with torch.inference_mode():
+        for t in tqdm.tqdm(range(999, -1, -1), desc="generating image"):
+            time_tensor = torch.tensor([t if t > 0 else 1], device=device)  # model was never trained on t=0
+            noise_pred = model(generative_image, time_tensor)
+
+            angle_t = (t * math.pi) / 2000
+            cos_t = max(math.cos(angle_t), 1e-3)   
+            sin_t = math.sin(angle_t)
+
+        # recover the best from this step wieght
+            x0_pred = (generative_image - noise_pred * sin_t) / cos_t
+            x0_pred = torch.clamp(x0_pred, 0.0, 1.0)  # keep the estimate sane before reusing it
+
+        #regeneration of noise for next step
+            t_next = max(t-1,0 )
+            angle_next = (t_next * math.pi) / 2000
+            cos_next = math.cos(angle_next)
+            sin_next = math.sin(angle_next)
+
+            generative_image = x0_pred * cos_next + noise_pred * sin_next
+
+        generative_image = generative_image.squeeze(0).cpu().permute(1, 2, 0).numpy()
+    #visualizing the generated image
     model.eval()
     with torch.inference_mode():
         noisy_img, time_stamp, noise = next(iter(val_loader))
@@ -211,14 +237,17 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     org_noise= noise*math.sin((time_batch[0].item()*math.pi)/2000)
     pred_noise  = preds[0].cpu().permute(1, 2, 0).numpy()
     rec_noise= pred_noise*math.sin((time_batch[0].item()*math.pi)/2000)
-    cos= max(math.cos((time_batch[0].item()*math.pi)/2000),1e-7)
+    cos= max(math.cos((time_batch[0].item()*math.pi)/2000),1e-3)
     reconstructed_img = np.clip((noisy_img - rec_noise)/cos, 0.0, 1.0)
     original_img = np.clip((noisy_img - org_noise)/cos, 0.0, 1.0)
 
-    fig, axes = plt.subplots(1, 5, figsize=(20, 4))
+    fig, axes = plt.subplots(1, 6, figsize=(20, 4))
+    # fig, axes = plt.subplots(1, 5, figsize=(20, 4))
     axes[0].imshow(noisy_img); axes[0].set_title("Noisy Image(input)"); axes[0].axis("off")
     axes[1].imshow(pred_noise);  axes[1].set_title("Model output(Noise)");  axes[1].axis("off")
     axes[2].imshow(reconstructed_img); axes[2].set_title("Reconstructed (by removing noise)"); axes[2].axis("off")
     axes[3].imshow(noise); axes[3].set_title("Noise (target)"); axes[3].axis("off")
     axes[4].imshow(original_img); axes[4].set_title("Original Image (by removing noise)"); axes[4].axis("off")
+    axes[5].imshow(generative_image); axes[5].set_title("Generated Image"); axes[5].axis("off")
+
     plt.show()
