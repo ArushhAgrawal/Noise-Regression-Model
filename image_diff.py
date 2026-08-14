@@ -199,17 +199,19 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     generative_image = torch.randn((1, 3, 160, 160)).to(device)  # keep batch dim for the model
 
     with torch.inference_mode():
-        for t in tqdm.tqdm(range(999, -1, -1), desc="generating image"):
+        for t in tqdm.tqdm(range(850, -1, -1), desc="generating image"):
             time_tensor = torch.tensor([t if t > 0 else 1], device=device)  # model was never trained on t=0
             noise_pred = model(generative_image, time_tensor)
 
-            angle_t = (t * math.pi) / 2000
-            cos_t = max(math.cos(angle_t), 1e-3)   
+            angle_t = (t * math.pi) / 2000   
             sin_t = math.sin(angle_t)
-
+            cos_t = max(math.cos(angle_t), 1e-3)
+            if abs(cos_t)<0.05:
+                x0_pred= generative_image
         # recover the best from this step wieght
-            x0_pred = (generative_image - noise_pred * sin_t) / cos_t
-            x0_pred = torch.clamp(x0_pred, 0.0, 1.0)  # keep the estimate sane before reusing it
+            else:
+                x0_pred = (generative_image - noise_pred * sin_t) / cos_t
+                x0_pred = torch.clamp(x0_pred, 0.0, 1.0)  # keep the estimate sane before reusing it
 
         #regeneration of noise for next step
             t_next = max(t-1,0 )
