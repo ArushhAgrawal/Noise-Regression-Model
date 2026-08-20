@@ -121,12 +121,12 @@ class ImageDataset(Dataset):
         noise= torch.randn_like(clear_tensor)
         noisy_tensor = (clear_tensor*image_weight) + (noise*noise_weight)
         time_stamp=timestamp
-        return noisy_tensor,time_stamp, noise
+        return noisy_tensor,time_stamp, noise, clear_tensor
     
 #loading data
 if __name__=="__main__":#runs from here after each time we run the code not from the import
-    full_data= ImageDataset(image_dir="data/clear_images/", resize_shape=(160,160), max_image=520)
-    train_size= int(0.8*(len(full_data)))
+    full_data= ImageDataset(image_dir="data/clear_images/", resize_shape=(160,160), max_image=417)
+    train_size= int((len(full_data)))-1
     val_size= len(full_data)-train_size
     train_dataset, val_dataset= random_split(full_data, [train_size, val_size])
     train_loader=DataLoader(
@@ -138,8 +138,8 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     val_loader= DataLoader(
         dataset=val_dataset,
         num_workers=2,
+        batch_size=1,
         persistent_workers=True,
-        batch_size=4,
         shuffle=False)
 # x, y = next(iter(val_loader))
 # print(y[0].shape)
@@ -153,15 +153,18 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     loss_fn= nn.MSELoss()
 #making checkpoints
     start_epoch=0
-    epochs=305
+    epochs=315
     run_loss=0
     checkpoint_dir= "checkpoint3"
     os.makedirs(checkpoint_dir,exist_ok=True)
     latest_chkp3=os.path.join(checkpoint_dir, "latest_3.pth")
     if os.path.exists(latest_chkp3):
         checkpoint= torch.load(latest_chkp3, map_location=device)
-        model.load_state_dict(checkpoint["model_state"])
-        optimizer.load_state_dict(checkpoint["optimizer_state"])
+        model.load_state_dict(checkpoint["model_state"], strict=False)
+        try:
+            optimizer.load_state_dict(checkpoint["optimizer_state"])
+        except ValueError:
+            print("starting new optim from here ")
         start_epoch= checkpoint["epoch"]+1
         average_loss= checkpoint["loss"]
         print("resumed from checkpoint")
@@ -174,7 +177,7 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     for epoch in epoch_bar:
         model.train()
         run_loss=0
-        for batch, (noisy_img, time_stamp, noise) in enumerate(train_loader):
+        for batch, (noisy_img, time_stamp, noise, _) in enumerate(train_loader):
             image_train= noisy_img.to(device, non_blocking=True)
             time_train= time_stamp.to(device, non_blocking=True)
             noise_train= noise.to(device, non_blocking=True)
@@ -196,10 +199,17 @@ if __name__=="__main__":#runs from here after each time we run the code not from
 
 #generating image
     model.eval()
-    generative_image = torch.randn((1, 3, 160, 160)).to(device)  # keep batch dim for the model
-
+    _,_,_, clear_tensor= next(iter(val_dataset))
+    clear_tensor= clear_tensor.to(device)
+    timestamp=torch.tensor(1000).to(torch.int64)
+    angle= (timestamp.float()*math.pi)/2000
+    image_weight= torch.cos(angle)
+    noise_weight= torch.sin(angle)
+    noise= torch.rand_like(clear_tensor)
+    generative_image = torch.unsqueeze((clear_tensor*image_weight) + (noise*noise_weight),0)
+    
     with torch.inference_mode():
-        for t in tqdm.tqdm(range(850, -1, -1), desc="generating image"):
+        for t in tqdm.tqdm(range(1000, -1, -1), desc="generating image"):
             time_tensor = torch.tensor([t if t > 0 else 1], device=device)  # model was never trained on t=0
             noise_pred = model(generative_image, time_tensor)
 
@@ -225,7 +235,7 @@ if __name__=="__main__":#runs from here after each time we run the code not from
     #visualizing the generated image
     model.eval()
     with torch.inference_mode():
-        noisy_img, time_stamp, noise = next(iter(val_loader))
+        noisy_img, time_stamp, noise, _= next(iter(val_loader))
         img_batch = noisy_img.to(device) 
         time_batch = time_stamp.to(device)
         noise_batch = noise.to(device)
